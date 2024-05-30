@@ -1,0 +1,45 @@
+# Set environment variables
+$KEYVAULT_NAME="kv-bunnyai"
+$CLUSTER_NAME="bunny-aksee"
+$RESOURCE_GROUP="BunnyAI"
+$TENANT_ID="ee0ab6a5-6acc-4245-be1e-763c63ccbf12"
+$SUBSCRIPTION_ID="355da983-5ec4-45d6-bfb0-47e3847235ed"
+$localPathProvisionerYaml = "https://raw.githubusercontent.com/Azure/AKS-Edge/main/samples/storage/local-path-provisioner/local-path-storage.yaml"
+$STORAGE_ACCOUNT_NAME="sabunnystorage"
+$CONTAINER_NAME="bunnyvolume"
+$NAMESPACE="default"
+$SECRET_NAME="storagekey"
+
+# Get the object ID of the custom location resource provider
+Install-Module Az.Accounts, Az.Resources
+Import-Module Az.Accounts, Az.Resources
+Connect-AzAccount -Identity # MSI will need Directory.Reader in Entra tenant to execute the next line
+$customLocationRPOID=(Get-AzADServicePrincipal -DisplayName 'Custom Locations RP').Id # 5f23b008-6622-4ec8-b32a-79e675cc0fcd
+
+# Create the RG and keyvault
+az login # use an account with RBAC on the RG
+az group create -n BunnyAI -l eastus2
+az keyvault create -n $KEYVAULT_NAME -g $RESOURCE_GROUP --enable-rbac-authorization false
+
+# Enable some cluster features
+kubectl apply -f $localPathProvisionerYaml
+az connectedk8s connect --resource-group $RESOURCE_GROUP --name $CLUSTER_NAME --distribution aks_edge_k3s
+az connectedk8s enable-features --name $CLUSTER_NAME --resource-group $RESOURCE_GROUP `
+    --features cluster-connect custom-locations --custom-locations-oid $customLocationRPOID
+
+# Deploy edge storage accelerator
+az k8s-extension create --resource-group $RESOURCE_GROUP --cluster-name $CLUSTER_NAME --cluster-type connectedClusters --extension-type Microsoft.openservicemesh --scope cluster --name osm
+az k8s-extension create --resource-group $RESOURCE_GROUP --cluster-name $CLUSTER_NAME --cluster-type connectedClusters --name hydraext --extension-type microsoft.edgestorageaccelerator --config-file "config.json"
+
+# Create a storage account for use with edge storage accelerator
+az storage account create -n $STORAGE_ACCOUNT_NAME -g $RESOURCE_GROUP --sku Standard_LRS
+az storage container create -n $CONTAINER_NAME --account-name $STORAGE_ACCOUNT_NAME
+
+# Create a kubernetes secret for syncing with the storage account
+$secretValue = az storage account keys list --resource-group $RESOURCE_GROUP --account-name $STORAGE_ACCOUNT_NAME --query "[0].value" --output tsv
+kubectl create secret generic -n $NAMESPACE $SECRET_NAME --from-literal=azurestorageaccountkey="$secretValue" --from-literal=azurestorageaccountname="$STORAGE_ACCOUNT_NAME"
+
+# Deploy IOT Ops
+az iot ops init --mq-service-type loadBalancer --mq-insecure true --simulate-plc false `
+    --cluster $CLUSTER_NAME --resource-group $RESOURCE_GROUP `
+    --kv-id $(az keyvault show --name $KEYVAULT_NAME -o tsv --query id)
