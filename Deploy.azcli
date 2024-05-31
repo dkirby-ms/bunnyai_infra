@@ -27,6 +27,9 @@ az connectedk8s connect --resource-group $RESOURCE_GROUP --name $CLUSTER_NAME --
 az connectedk8s enable-features --name $CLUSTER_NAME --resource-group $RESOURCE_GROUP `
     --features cluster-connect custom-locations --custom-locations-oid $customLocationRPOID
 
+# Enable secrets store sync with Key vault
+az k8s-extension create --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --cluster-type connectedClusters --extension-type Microsoft.AzureKeyVaultSecretsProvider --name akvsecretsprovider
+
 # Deploy edge storage accelerator
 az k8s-extension create --resource-group $RESOURCE_GROUP --cluster-name $CLUSTER_NAME --cluster-type connectedClusters --extension-type Microsoft.openservicemesh --scope cluster --name osm
 az k8s-extension create --resource-group $RESOURCE_GROUP --cluster-name $CLUSTER_NAME --cluster-type connectedClusters --name hydraext --extension-type microsoft.edgestorageaccelerator --config-file "config.json"
